@@ -19,6 +19,7 @@ jobs:
       image: termux/termux-docker:${{ matrix.architecture }}
       volumes: 
         - /tmp/node20:/__e/node20
+        - /tmp/termux-cache-${{ matrix.architecture }}:${{ env.PREFIX }}/var/cache/apt
     env:
       ANDROID_ROOT: /system
       ANDROID_DATA: /data
@@ -29,49 +30,40 @@ jobs:
       LANG: en_US.UTF-8
       TZ: UTC
     steps:
-      - name: Set Termux Package Mirror
-        run: ln -sf ${PREFIX}/etc/termux/mirrors/default ${PREFIX}/etc/termux/chosen_mirrors
-      
-      - name: Cache Termux Packages
-        uses: actions/cache@v4.2.3
-        with:
-          path: |
-            ${{ env.PREFIX }}/var/lib/apt/lists
-            ${{ env.PREFIX }}/var/cache/apt
-          key: termux-packages-${{ matrix.architecture }}-${{ github.run_id }}
-          restore-keys: termux-packages-${{ matrix.architecture }}-
-
-      - name: Upgrade Packages
-        run: /entrypoint.sh bash -c "yes | pkg upgrade -y"
-      
-      - name: Fix Executable Permissions
-        run: chmod -R o+x ${PREFIX}/bin
-
-      - name: Cache Node.js Modules
+      - name: Cache Termux packages
         uses: actions/cache@v4
         with:
-          path: ${{ env.PREFIX }}/var/lib/node_modules
-          key: termux-node-modules-${{ matrix.architecture }}-${{ github.run_id }}
-          restore-keys: termux-node-modules-${{ matrix.architecture }}-
+          path: /tmp/termux-cache-${{ matrix.architecture }}
+          key: termux-cache-${{ matrix.architecture }}
+          restore-keys: |
+            termux-cache-${{ matrix.architecture }}
 
-      - name: Install Node.js
+      - name: Cache Node.js binaries
+        uses: actions/cache@v4
+        with:
+          path: /tmp/node20
+          key: node20-bin-${{ matrix.architecture }}
+
+      - name: set pkg command to use the packages-cf.termux.dev mirror
+        run: ln -sf ${PREFIX}/etc/termux/mirrors/default ${PREFIX}/etc/termux/chosen_mirrors
+
+      - name: upgrade all packages to prepare for installing nodejs
+        run: /entrypoint.sh bash -c "yes | pkg upgrade -y"
+
+      - name: fix executable bit for all binaries in $PREFIX/bin for all users
+        run: chmod -R o+x ${PREFIX}/bin
+
+      - name: install bionic-libc nodejs to force compatibility with actions/checkout and actions/upload-artifact
         run: |
           /entrypoint.sh pkg install -y nodejs-lts
           ln -sf ${PREFIX}/bin /__e/node20/bin
 
       - uses: actions/checkout@v4.2.2
 
-      - name: Fix Repository Permissions
+      - name: fix permissions of repository after actions/checkout, which ran as root user
         run: chown -R 1000:1000 .
 
-      - name: Cache Built Artifacts
-        uses: actions/cache@v4.2.3
-        with:
-          path: platform/android/android/lib
-          key: android-lib-${{ matrix.architecture }}-${{ github.run_id }}
-          restore-keys: android-lib-${{ matrix.architecture }}-
-
-      - name: Build
+      - name: build
         run: /entrypoint.sh .github/build-android.sh
 
       - uses: actions/upload-artifact@v4.6.0
@@ -88,36 +80,63 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Install Dependencies
+      - name: install dependencies
         run: |
           sudo apt-get update
           sudo apt-get upgrade -y
           sudo apt-get install -y zipalign apksigner
 
       - uses: actions/checkout@v4.2.2
-      
-      - name: Cache Built Artifacts
-        uses: actions/cache@v4.2.3
-        with:
-          path: platform/android/android/lib
-          key: android-lib-merge-${{ github.run_id }}
-          restore-keys: android-lib-
 
-      - name: Fetch All Architecture Libraries
+      - name: Fetch libmain.so (x86)
         uses: actions/download-artifact@v4
         with:
-          pattern: "main-*"
-          merge-multiple: true
-          path: platform/android/android/lib/
+          name: main-i686
+          path: platform/android/android/lib/x86
 
-      - name: Fetch All Architecture C++ Libraries
+      - name: Fetch libc++_shared.so (x86)
         uses: actions/download-artifact@v4
         with:
-          pattern: "libc++-*"
-          merge-multiple: true
-          path: platform/android/android/lib/
+          name: libc++-i686
+          path: platform/android/android/lib/x86
 
-      - name: Generate Merged APK
+      - name: Fetch libmain.so (x86_64)
+        uses: actions/download-artifact@v4
+        with:
+          name: main-x86_64
+          path: platform/android/android/lib/x86_64
+
+      - name: Fetch libc++_shared.so (x86_64)
+        uses: actions/download-artifact@v4
+        with:
+          name: libc++-x86_64
+          path: platform/android/android/lib/x86_64
+
+      - name: Fetch libmain.so (armeabi-v7a)
+        uses: actions/download-artifact@v4
+        with:
+          name: main-arm
+          path: platform/android/android/lib/armeabi-v7a
+
+      - name: Fetch libc++_shared.so (armeabi-v7a)
+        uses: actions/download-artifact@v4
+        with:
+          name: libc++-arm
+          path: platform/android/android/lib/armeabi-v7a
+
+      - name: Fetch libmain.so (arm64-v8a)
+        uses: actions/download-artifact@v4
+        with:
+          name: main-aarch64
+          path: platform/android/android/lib/arm64-v8a
+
+      - name: Fetch libc++_shared.so (arm64-v8a)
+        uses: actions/download-artifact@v4
+        with:
+          name: libc++-aarch64
+          path: platform/android/android/lib/arm64-v8a
+
+      - name: Generate merged apk
         run: |
           mkdir platform/android/android/assets/
           cp -r {mods,lang,palettes,dynos} platform/android/android/assets/
